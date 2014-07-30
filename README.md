@@ -17,7 +17,8 @@ Usage: insert_dylib [--inplace] dylib_path binary_path [new_binary_path]
 
 `insert_dylib` inserts a load command to load the `dylib_path` in `binary_path`.
 
-Unless `--inplace` option is specified, `insert_dylib` will produce a new binary at `new_binary_path`. If neither `--inplace` or `new_binary_path` is specified, the output binary will be located at the same location as the input binary with `_patched` prepended to the name.
+Unless `--inplace` option is specified, `insert_dylib` will produce a new binary at `new_binary_path`.  
+If neither `--inplace` nor `new_binary_path` is specified, the output binary will be located at the same location as the input binary with `_patched` prepended to the name.
 
 ### Example
 
