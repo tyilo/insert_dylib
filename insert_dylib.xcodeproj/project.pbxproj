@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		55ABCB4D19881CA600B03F31 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = 55ABCB4C19881CA600B03F31 /* main.c */; };
-		55ABCB4F19881CA600B03F31 /* insert_dylib.1 in CopyFiles */ = {isa = PBXBuildFile; fileRef = 55ABCB4E19881CA600B03F31 /* insert_dylib.1 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -18,7 +17,6 @@
 			dstPath = /usr/share/man/man1/;
 			dstSubfolderSpec = 0;
 			files = (
-				55ABCB4F19881CA600B03F31 /* insert_dylib.1 in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 		};
@@ -27,7 +25,6 @@
 /* Begin PBXFileReference section */
 		55ABCB4919881CA600B03F31 /* insert_dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = insert_dylib; sourceTree = BUILT_PRODUCTS_DIR; };
 		55ABCB4C19881CA600B03F31 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
-		55ABCB4E19881CA600B03F31 /* insert_dylib.1 */ = {isa = PBXFileReference; lastKnownFileType = text.man; path = insert_dylib.1; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,7 +58,6 @@
 			isa = PBXGroup;
 			children = (
 				55ABCB4C19881CA600B03F31 /* main.c */,
-				55ABCB4E19881CA600B03F31 /* insert_dylib.1 */,
 			);
 			path = insert_dylib;
 			sourceTree = "<group>";
