@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>
 #include <copyfile.h>
 #include <mach-o/loader.h>
 #include <mach-o/fat.h>
@@ -16,11 +17,16 @@ void usage(void) {
 	exit(1);
 }
 
-void insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
+bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	fseek(f, header_offset, SEEK_SET);
 	
 	struct mach_header mh;
 	fread(&mh, sizeof(struct mach_header), 1, f);
+	
+	if(mh.magic != MH_MAGIC_64 && mh.magic != MH_CIGAM_64 && mh.magic != MH_MAGIC && mh.magic != MH_CIGAM) {
+		printf("Unknown magic: 0x%x\n", mh.magic);
+		return false;
+	}
 	
 	if(IS_64_BIT(mh.magic)) {
 		fseek(f, sizeof(struct mach_header_64) - sizeof(struct mach_header), SEEK_CUR);
@@ -29,9 +35,6 @@ void insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	size_t dylib_path_len = strlen(dylib_path);
 	size_t dylib_path_size = (dylib_path_len & ~3) + 4;
 	uint32_t cmdsize = (uint32_t)(sizeof(struct dylib_command) + dylib_path_size);
-	
-	char *dylib_path_padded = calloc(dylib_path_size, 1);
-	memcpy(dylib_path_padded, dylib_path, dylib_path_len);
 	
 	struct dylib_command dylib_command = {
 		.cmd = SWAP32(LC_LOAD_DYLIB, mh.magic),
@@ -47,6 +50,21 @@ void insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	uint32_t sizeofcmds = SWAP32(mh.sizeofcmds, mh.magic);
 	
 	fseek(f, sizeofcmds, SEEK_CUR);
+	char space[cmdsize];
+	
+	fread(&space, cmdsize, 1, f);
+	
+	for(int i = 0; i < cmdsize; i++) {
+		if(space[i] != 0) {
+			printf("Not enough empty space after last load command!\n");
+			
+			return false;
+		}
+	}
+	
+	char *dylib_path_padded = calloc(dylib_path_size, 1);
+	memcpy(dylib_path_padded, dylib_path, dylib_path_len);
+	
 	fwrite(&dylib_command, sizeof(dylib_command), 1, f);
 	fwrite(dylib_path_padded, dylib_path_size, 1, f);
 	
@@ -58,6 +76,8 @@ void insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	
 	fseek(f, header_offset, SEEK_SET);
 	fwrite(&mh, sizeof(mh), 1, f);
+	
+	return true;
 }
 
 int main(int argc, const char *argv[]) {
@@ -100,6 +120,8 @@ int main(int argc, const char *argv[]) {
 		exit(1);
 	}
 	
+	bool success = true;
+		
 	uint32_t magic;
 	fread(&magic, sizeof(uint32_t), 1, f);
 	
@@ -118,11 +140,24 @@ int main(int argc, const char *argv[]) {
 			struct fat_arch archs[nfat_arch];
 			fread(&archs, sizeof(archs), 1, f);
 			
+			int fails = 0;
+			
 			for(int i = 0; i < nfat_arch; i++) {
-				insert_dylib(f, SWAP32(archs[i].offset, magic), dylib_path);
+				bool r = insert_dylib(f, SWAP32(archs[i].offset, magic), dylib_path);
+				if(!r) {
+					printf("Failed to add LC_LOAD_DYLIB command to arch #%d!\n", i + 1);
+					fails++;
+				}
 			}
 			
-			printf("Added CL_LOAD_DYLIB command to all archs in %s\n", binary_path);
+			if(fails == 0) {
+				printf("Added LC_LOAD_DYLIB command to all archs in %s\n", binary_path);
+			} else if(fails == nfat_arch) {
+				printf("Failed to add LC_LOAD_DYLIB command to any archs.\n");
+				success = false;
+			} else {
+				printf("Added LC_LOAD_DYLIB command to %d/%d archs in %s\n", nfat_arch - fails, nfat_arch, binary_path);
+			}
 			
 			break;
 		}
@@ -130,17 +165,26 @@ int main(int argc, const char *argv[]) {
 		case MH_CIGAM_64:
 		case MH_MAGIC:
 		case MH_CIGAM:
-			insert_dylib(f, 0, dylib_path);
-			printf("Added LC_LOAD_DYLIB command to %s\n", binary_path);
+			if(insert_dylib(f, 0, dylib_path)) {
+				printf("Added LC_LOAD_DYLIB command to %s\n", binary_path);
+			} else {
+				printf("Failed to add LC_LOAD_DYLIB command!\n");
+				success = false;
+			}
 			break;
-		default: {
+		default:
 			printf("Unknown magic: 0x%x\n", magic);
 			exit(1);
-		}
 	}
 	
 	fclose(f);
 	
+	if(!success) {
+		if(!inplace) {
+			unlink(binary_path);
+		}
+		exit(1);
+	}
+	
     return 0;
 }
-
