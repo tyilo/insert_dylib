@@ -62,6 +62,8 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 		}
 	}
 	
+	fseek(f, -sizeofcmds, SEEK_CUR);
+	
 	char *dylib_path_padded = calloc(dylib_path_size, 1);
 	memcpy(dylib_path_padded, dylib_path, dylib_path_len);
 	
