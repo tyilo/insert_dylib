@@ -14,7 +14,7 @@
 #define IS_LITTLE_ENDIAN(x) ((x) == FAT_CIGAM || (x) == MH_CIGAM_64 || (x) == MH_CIGAM)
 #define SWAP32(x, magic) (IS_LITTLE_ENDIAN(magic)? OSSwapInt32(x): (x))
 
-void usage(void) {
+__attribute__((noreturn)) void usage(void) {
 	printf("Usage: insert_dylib [--inplace] [--weak] dylib_path binary_path [new_path]\n");
 	
 	exit(1);
@@ -32,7 +32,11 @@ __attribute__((format(printf, 1, 2))) bool ask(const char *format, ...) {
 	free(question);
 	
 	while(true) {
-		switch(getchar()) {
+		char *line = NULL;
+		size_t size;
+		getline(&line, &size, stdin);
+		
+		switch(line[0]) {
 			case 'y':
 			case 'Y':
 				return true;
@@ -42,7 +46,7 @@ __attribute__((format(printf, 1, 2))) bool ask(const char *format, ...) {
 				return false;
 				break;
 			default:
-				printf("\nPlease enter y or n: ");
+				printf("Please enter y or n: ");
 		}
 	}
 }
