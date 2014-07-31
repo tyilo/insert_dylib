@@ -5,6 +5,7 @@ Command line utility for inserting a dylib load command into a Mach-O binary.
 
 Does the following (to each arch if the binary is fat):
 
+- (Removes `LC_CODE_SIGNATURE` load command if present) 
 - Adds a `LC_LOAD_DYLIB` load command to the end of the load commands
 - Increments the mach header's `ncmds` and adjusts its `sizeofcmds`
 
@@ -12,13 +13,15 @@ Usage
 -----
 
 ```
-Usage: insert_dylib [--inplace] dylib_path binary_path [new_binary_path]
+Usage: insert_dylib [--inplace] [--weak] dylib_path binary_path [new_path]
 ```
 
 `insert_dylib` inserts a load command to load the `dylib_path` in `binary_path`.
 
 Unless `--inplace` option is specified, `insert_dylib` will produce a new binary at `new_binary_path`.  
 If neither `--inplace` nor `new_binary_path` is specified, the output binary will be located at the same location as the input binary with `_patched` prepended to the name.
+
+If the `--weak` option is specified, `insert_dylib` will insert a `LC_LOAD_WEAK_DYLIB` load command instead of `LC_LOAD_DYLIB`.
 
 ### Example
 
@@ -30,7 +33,8 @@ int main(void) {
 ^D
 $ clang test.c -o test &> /dev/null
 $ insert_dylib /usr/lib/libfoo.dylib test
-Added LC_LOAD_DYLIB command to test_patched
+The provided dylib path doesn't exist. Continue anyway? [y/n] y
+Added LC_LOAD_DYLIB to test_patched
 $ ./test
 Testing
 $ ./test_patched
@@ -40,6 +44,7 @@ dyld: Library not loaded: /usr/lib/libfoo.dylib
 Trace/BPT trap: 5
 ```
 
+#### `otool` `diff` between original and patched binary
 ```
 $ diff -u <(otool -hl test) <(otool -hl test_patched)
 --- /dev/fd/63	2014-07-30 04:08:40.000000000 +0200
@@ -67,8 +72,17 @@ $ diff -u <(otool -hl test) <(otool -hl test_patched)
 +compatibility version 0.0.0
 ```
 
+#### `--weak` option
+
+```
+$ insert_dylib --weak /usr/lib/libfoo.dylib test test_patched2
+The provided dylib path doesn't exist. Continue anyway? [y/n] y
+Added LC_LOAD_WEAK_DYLIB to test_patched2
+$ ./test_patched2
+Testing
+```
+
 Todo
 ----
 
-- Handle `LC_CODE_SIGNATURE` load command
 - Improved checking for free space to insert the new load command

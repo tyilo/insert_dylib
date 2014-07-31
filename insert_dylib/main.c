@@ -1,8 +1,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#include <getopt.h>
+#include <sys/stat.h>
 #include <copyfile.h>
 #include <mach-o/loader.h>
 #include <mach-o/fat.h>
@@ -12,12 +15,84 @@
 #define SWAP32(x, magic) (IS_LITTLE_ENDIAN(magic)? OSSwapInt32(x): (x))
 
 void usage(void) {
-	printf("Usage: insert_dylib [--inplace] dylib_path binary_path [new_binary_path]\n");
+	printf("Usage: insert_dylib [--inplace] [--weak] dylib_path binary_path [new_path]\n");
 	
 	exit(1);
 }
 
-bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
+__attribute__((format(printf, 1, 2))) bool ask(const char *format, ...) {
+	char *question;
+	asprintf(&question, "%s [y/n] ", format);
+	
+	va_list args;
+	va_start(args, format);
+	vprintf(question, args);
+	va_end(args);
+	
+	free(question);
+	
+	while(true) {
+		switch(getchar()) {
+			case 'y':
+			case 'Y':
+				return true;
+				break;
+			case 'n':
+			case 'N':
+				return false;
+				break;
+			default:
+				printf("\nPlease enter y or n: ");
+		}
+	}
+}
+
+void remove_code_signature(FILE *f, struct mach_header *mh, size_t header_offset, size_t commands_offset) {
+	fseek(f, commands_offset, SEEK_SET);
+	
+	uint32_t ncmds = SWAP32(mh->ncmds, mh->magic);
+	
+	for(int i = 0; i < ncmds; i++) {
+		struct load_command lc;
+		fread(&lc, sizeof(lc), 1, f);
+		
+		if(SWAP32(lc.cmd, mh->magic) == LC_CODE_SIGNATURE) {
+			if(i == ncmds - 1 && ask("LC_CODE_SIGNATURE load command found. Remove it?")) {
+				fseek(f, -((long)sizeof(lc)), SEEK_CUR);
+				
+				struct linkedit_data_command ldc;
+				fread(&ldc, sizeof(ldc), 1, f);
+				
+				uint32_t cmdsize = SWAP32(ldc.cmdsize, mh->magic);
+				uint32_t dataoff = SWAP32(ldc.dataoff, mh->magic);
+				uint32_t datasize = SWAP32(ldc.datasize, mh->magic);
+				
+				fseek(f, -((long)sizeof(ldc)), SEEK_CUR);
+				
+				char *zero = calloc(cmdsize, 1);
+				fwrite(zero, cmdsize, 1, f);
+				free(zero);
+				
+				fseek(f, header_offset + dataoff, SEEK_SET);
+				
+				zero = calloc(datasize, 1);
+				fwrite(zero, datasize, 1, f);
+				free(zero);
+				
+				mh->ncmds = SWAP32(ncmds - 1, mh->magic);
+				mh->sizeofcmds = SWAP32(SWAP32(mh->sizeofcmds, mh->magic) - ldc.cmdsize, mh->magic);
+				
+				return;
+			} else {
+				printf("LC_CODE_SIGNATURE is not the last load command, so couldn't remove.");
+			}
+		}
+		
+		fseek(f, SWAP32(lc.cmdsize, mh->magic) - sizeof(lc), SEEK_CUR);
+	}
+}
+
+bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path, bool weak) {
 	fseek(f, header_offset, SEEK_SET);
 	
 	struct mach_header mh;
@@ -28,16 +103,16 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 		return false;
 	}
 	
-	if(IS_64_BIT(mh.magic)) {
-		fseek(f, sizeof(struct mach_header_64) - sizeof(struct mach_header), SEEK_CUR);
-	}
+	size_t commands_offset = header_offset + (IS_64_BIT(mh.magic)? sizeof(struct mach_header_64): sizeof(struct mach_header));
+	
+	remove_code_signature(f, &mh, header_offset, commands_offset);
 	
 	size_t dylib_path_len = strlen(dylib_path);
 	size_t dylib_path_size = (dylib_path_len & ~3) + 4;
 	uint32_t cmdsize = (uint32_t)(sizeof(struct dylib_command) + dylib_path_size);
 	
 	struct dylib_command dylib_command = {
-		.cmd = SWAP32(LC_LOAD_DYLIB, mh.magic),
+		.cmd = SWAP32(weak? LC_LOAD_WEAK_DYLIB: LC_LOAD_DYLIB, mh.magic),
 		.cmdsize = SWAP32(cmdsize, mh.magic),
 		.dylib = {
 			.name = SWAP32(sizeof(struct dylib_command), mh.magic),
@@ -49,15 +124,21 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	
 	uint32_t sizeofcmds = SWAP32(mh.sizeofcmds, mh.magic);
 	
-	fseek(f, sizeofcmds, SEEK_CUR);
+	fseek(f, commands_offset + sizeofcmds, SEEK_SET);
 	char space[cmdsize];
 	
 	fread(&space, cmdsize, 1, f);
 	
+	bool empty = true;
 	for(int i = 0; i < cmdsize; i++) {
 		if(space[i] != 0) {
-			printf("Not enough empty space after last load command!\n");
-			
+			empty = false;
+			break;
+		}
+	}
+	
+	if(!empty) {
+		if(!ask("It doesn't seem like there is enough empty space. Continue anyway?")) {
 			return false;
 		}
 	}
@@ -83,28 +164,74 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 }
 
 int main(int argc, const char *argv[]) {
-	bool inplace = false;
+	int inplace = false;
+	int weak = false;
 	
-	if(argc >= 2 && strcmp(argv[1], "--inplace") == 0) {
-		inplace = true;
+	struct option long_options[] = {
+		{"inplace", no_argument, &inplace, true},
+		{"weak",    no_argument, &weak,    true}
+	};
+	
+	while(true) {
+		int option_index = 0;
 		
-		argv = &argv[1];
-		argc--;
+		int c = getopt_long(argc, (char *const *)argv, "", long_options, &option_index);
+		
+		if(c == -1) {
+			break;
+		}
+		
+		switch(c) {
+			case 0:
+				break;
+			case '?':
+				usage();
+				break;
+			default:
+				abort();
+				break;
+		}
 	}
+	
+	argv = &argv[optind - 1];
+	argc -= optind - 1;
 	
 	if(argc < 3 || argc > 4) {
 		usage();
 	}
 	
+	const char *lc_name = weak? "LC_LOAD_WEAK_DYLIB": "LC_LOAD_DYLIB";
+	
 	const char *dylib_path = argv[1];
 	const char *binary_path = argv[2];
 	
+	struct stat s;
+	
+	if(stat(binary_path, &s) != 0) {
+		perror(binary_path);
+		exit(1);
+	}
+	
+	if(stat(dylib_path, &s) != 0) {
+		if(!ask("The provided dylib path doesn't exist. Continue anyway?")) {
+			exit(1);
+		}
+	}
+	
+	bool binary_path_was_malloced = false;
 	if(!inplace) {
 		char *new_binary_path;
 		if(argc == 4) {
 			new_binary_path = (char *)argv[3];
 		} else {
 			asprintf(&new_binary_path, "%s_patched", binary_path);
+			binary_path_was_malloced = true;
+		}
+		
+		if(stat(new_binary_path, &s) == 0) {
+			if(!ask("%s already exists. Overwrite it?", new_binary_path)) {
+				exit(1);
+			}
 		}
 		
 		if(copyfile(binary_path, new_binary_path, NULL, COPYFILE_DATA | COPYFILE_UNLINK)) {
@@ -145,20 +272,20 @@ int main(int argc, const char *argv[]) {
 			int fails = 0;
 			
 			for(int i = 0; i < nfat_arch; i++) {
-				bool r = insert_dylib(f, SWAP32(archs[i].offset, magic), dylib_path);
+				bool r = insert_dylib(f, SWAP32(archs[i].offset, magic), dylib_path, weak);
 				if(!r) {
-					printf("Failed to add LC_LOAD_DYLIB command to arch #%d!\n", i + 1);
+					printf("Failed to add %s to arch #%d!\n", lc_name, i + 1);
 					fails++;
 				}
 			}
 			
 			if(fails == 0) {
-				printf("Added LC_LOAD_DYLIB command to all archs in %s\n", binary_path);
+				printf("Added %s to all archs in %s\n", lc_name, binary_path);
 			} else if(fails == nfat_arch) {
-				printf("Failed to add LC_LOAD_DYLIB command to any archs.\n");
+				printf("Failed to add %s to any archs.\n", lc_name);
 				success = false;
 			} else {
-				printf("Added LC_LOAD_DYLIB command to %d/%d archs in %s\n", nfat_arch - fails, nfat_arch, binary_path);
+				printf("Added %s to %d/%d archs in %s\n", lc_name, nfat_arch - fails, nfat_arch, binary_path);
 			}
 			
 			break;
@@ -167,10 +294,10 @@ int main(int argc, const char *argv[]) {
 		case MH_CIGAM_64:
 		case MH_MAGIC:
 		case MH_CIGAM:
-			if(insert_dylib(f, 0, dylib_path)) {
-				printf("Added LC_LOAD_DYLIB command to %s\n", binary_path);
+			if(insert_dylib(f, 0, dylib_path, weak)) {
+				printf("Added %s to %s\n", lc_name, binary_path);
 			} else {
-				printf("Failed to add LC_LOAD_DYLIB command!\n");
+				printf("Failed to add %s!\n", lc_name);
 				success = false;
 			}
 			break;
@@ -186,6 +313,10 @@ int main(int argc, const char *argv[]) {
 			unlink(binary_path);
 		}
 		exit(1);
+	}
+	
+	if(binary_path_was_malloced) {
+		free((void *)binary_path);
 	}
 	
     return 0;
