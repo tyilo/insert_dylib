@@ -14,8 +14,32 @@
 #define IS_LITTLE_ENDIAN(x) ((x) == FAT_CIGAM || (x) == MH_CIGAM_64 || (x) == MH_CIGAM)
 #define SWAP32(x, magic) (IS_LITTLE_ENDIAN(magic)? OSSwapInt32(x): (x))
 
+int inplace_flag = false;
+int weak_flag = false;
+int overwrite_flag = false;
+int codesig_flag = 0;
+
+static struct option long_options[] = {
+	{"inplace",          no_argument, &inplace_flag,   true},
+	{"weak",             no_argument, &weak_flag,      true},
+	{"overwrite",        no_argument, &overwrite_flag, true},
+	{"strip-codesig",    no_argument, &codesig_flag,   1},
+	{"no-strip-codesig", no_argument, &codesig_flag,   2},
+	{NULL,               0,           NULL,            0}
+};
+
 __attribute__((noreturn)) void usage(void) {
-	printf("Usage: insert_dylib [--inplace] [--weak] dylib_path binary_path [new_path]\n");
+	printf("Usage: insert_dylib dylib_path binary_path [new_binary_path]\n");
+	
+	printf("Option flags:");
+	
+	struct option *opt = long_options;
+	while(opt->name != NULL) {
+		printf(" --%s", opt->name);
+		opt++;
+	}
+	
+	printf("\n");
 	
 	exit(1);
 }
@@ -51,7 +75,7 @@ __attribute__((format(printf, 1, 2))) bool ask(const char *format, ...) {
 	}
 }
 
-void remove_code_signature(FILE *f, struct mach_header *mh, size_t header_offset, size_t commands_offset) {
+bool check_load_commands(FILE *f, struct mach_header *mh, size_t header_offset, size_t commands_offset, const char *dylib_path) {
 	fseek(f, commands_offset, SEEK_SET);
 	
 	uint32_t ncmds = SWAP32(mh->ncmds, mh->magic);
@@ -60,43 +84,79 @@ void remove_code_signature(FILE *f, struct mach_header *mh, size_t header_offset
 		struct load_command lc;
 		fread(&lc, sizeof(lc), 1, f);
 		
-		if(SWAP32(lc.cmd, mh->magic) == LC_CODE_SIGNATURE) {
-			if(i == ncmds - 1 && ask("LC_CODE_SIGNATURE load command found. Remove it?")) {
+		uint32_t cmdsize = SWAP32(lc.cmdsize, mh->magic);
+		
+		switch(SWAP32(lc.cmd, mh->magic)) {
+			case LC_CODE_SIGNATURE:
+				if(i == ncmds - 1) {
+					if(codesig_flag == 2) {
+						return true;
+					}
+					
+					if(codesig_flag == 0 && !ask("LC_CODE_SIGNATURE load command found. Remove it?")) {
+						return true;
+					}
+					
+					fseek(f, -((long)sizeof(lc)), SEEK_CUR);
+					
+					struct linkedit_data_command ldc;
+					fread(&ldc, sizeof(ldc), 1, f);
+					
+					uint32_t dataoff = SWAP32(ldc.dataoff, mh->magic);
+					uint32_t datasize = SWAP32(ldc.datasize, mh->magic);
+					
+					fseek(f, -((long)sizeof(ldc)), SEEK_CUR);
+					
+					char *zero = calloc(cmdsize, 1);
+					fwrite(zero, cmdsize, 1, f);
+					free(zero);
+					
+					fseek(f, header_offset + dataoff, SEEK_SET);
+					
+					zero = calloc(datasize, 1);
+					fwrite(zero, datasize, 1, f);
+					free(zero);
+					
+					mh->ncmds = SWAP32(ncmds - 1, mh->magic);
+					mh->sizeofcmds = SWAP32(SWAP32(mh->sizeofcmds, mh->magic) - ldc.cmdsize, mh->magic);
+					
+					return true;
+				} else {
+					printf("LC_CODE_SIGNATURE is not the last load command, so couldn't remove.\n");
+				}
+				break;
+			case LC_LOAD_DYLIB:
+			case LC_LOAD_WEAK_DYLIB: {
+				struct dylib_command *dylib_command = malloc(cmdsize);
+				
 				fseek(f, -((long)sizeof(lc)), SEEK_CUR);
+				fread(dylib_command, cmdsize, 1, f);
 				
-				struct linkedit_data_command ldc;
-				fread(&ldc, sizeof(ldc), 1, f);
+				union lc_str offset = dylib_command->dylib.name;
+				char *name = &((char *)dylib_command)[offset.offset];
 				
-				uint32_t cmdsize = SWAP32(ldc.cmdsize, mh->magic);
-				uint32_t dataoff = SWAP32(ldc.dataoff, mh->magic);
-				uint32_t datasize = SWAP32(ldc.datasize, mh->magic);
+				int cmp = strcmp(name, dylib_path);
 				
-				fseek(f, -((long)sizeof(ldc)), SEEK_CUR);
+				free(dylib_command);
 				
-				char *zero = calloc(cmdsize, 1);
-				fwrite(zero, cmdsize, 1, f);
-				free(zero);
+				if(cmp == 0) {
+					if(!ask("Binary already contains a load command for that dylib. Continue anyway?")) {
+						return false;
+					}
+				}
 				
-				fseek(f, header_offset + dataoff, SEEK_SET);
-				
-				zero = calloc(datasize, 1);
-				fwrite(zero, datasize, 1, f);
-				free(zero);
-				
-				mh->ncmds = SWAP32(ncmds - 1, mh->magic);
-				mh->sizeofcmds = SWAP32(SWAP32(mh->sizeofcmds, mh->magic) - ldc.cmdsize, mh->magic);
-				
-				return;
-			} else {
-				printf("LC_CODE_SIGNATURE is not the last load command, so couldn't remove.");
+				fseek(f, -((long)cmdsize) + sizeof(lc), SEEK_CUR);
+				break;
 			}
 		}
 		
 		fseek(f, SWAP32(lc.cmdsize, mh->magic) - sizeof(lc), SEEK_CUR);
 	}
+	
+	return true;
 }
 
-bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path, bool weak) {
+bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	fseek(f, header_offset, SEEK_SET);
 	
 	struct mach_header mh;
@@ -109,14 +169,18 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path, bool we
 	
 	size_t commands_offset = header_offset + (IS_64_BIT(mh.magic)? sizeof(struct mach_header_64): sizeof(struct mach_header));
 	
-	remove_code_signature(f, &mh, header_offset, commands_offset);
+	bool cont = check_load_commands(f, &mh, header_offset, commands_offset, dylib_path);
+	
+	if(!cont) {
+		return true;
+	}
 	
 	size_t dylib_path_len = strlen(dylib_path);
 	size_t dylib_path_size = (dylib_path_len & ~3) + 4;
 	uint32_t cmdsize = (uint32_t)(sizeof(struct dylib_command) + dylib_path_size);
 	
 	struct dylib_command dylib_command = {
-		.cmd = SWAP32(weak? LC_LOAD_WEAK_DYLIB: LC_LOAD_DYLIB, mh.magic),
+		.cmd = SWAP32(weak_flag? LC_LOAD_WEAK_DYLIB: LC_LOAD_DYLIB, mh.magic),
 		.cmdsize = SWAP32(cmdsize, mh.magic),
 		.dylib = {
 			.name = SWAP32(sizeof(struct dylib_command), mh.magic),
@@ -168,14 +232,6 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path, bool we
 }
 
 int main(int argc, const char *argv[]) {
-	int inplace = false;
-	int weak = false;
-	
-	struct option long_options[] = {
-		{"inplace", no_argument, &inplace, true},
-		{"weak",    no_argument, &weak,    true}
-	};
-	
 	while(true) {
 		int option_index = 0;
 		
@@ -204,7 +260,7 @@ int main(int argc, const char *argv[]) {
 		usage();
 	}
 	
-	const char *lc_name = weak? "LC_LOAD_WEAK_DYLIB": "LC_LOAD_DYLIB";
+	const char *lc_name = weak_flag? "LC_LOAD_WEAK_DYLIB": "LC_LOAD_DYLIB";
 	
 	const char *dylib_path = argv[1];
 	const char *binary_path = argv[2];
@@ -223,7 +279,7 @@ int main(int argc, const char *argv[]) {
 	}
 	
 	bool binary_path_was_malloced = false;
-	if(!inplace) {
+	if(!inplace_flag) {
 		char *new_binary_path;
 		if(argc == 4) {
 			new_binary_path = (char *)argv[3];
@@ -232,7 +288,7 @@ int main(int argc, const char *argv[]) {
 			binary_path_was_malloced = true;
 		}
 		
-		if(stat(new_binary_path, &s) == 0) {
+		if(!overwrite_flag && stat(new_binary_path, &s) == 0) {
 			if(!ask("%s already exists. Overwrite it?", new_binary_path)) {
 				exit(1);
 			}
@@ -276,7 +332,7 @@ int main(int argc, const char *argv[]) {
 			int fails = 0;
 			
 			for(int i = 0; i < nfat_arch; i++) {
-				bool r = insert_dylib(f, SWAP32(archs[i].offset, magic), dylib_path, weak);
+				bool r = insert_dylib(f, SWAP32(archs[i].offset, magic), dylib_path);
 				if(!r) {
 					printf("Failed to add %s to arch #%d!\n", lc_name, i + 1);
 					fails++;
@@ -298,7 +354,7 @@ int main(int argc, const char *argv[]) {
 		case MH_CIGAM_64:
 		case MH_MAGIC:
 		case MH_CIGAM:
-			if(insert_dylib(f, 0, dylib_path, weak)) {
+			if(insert_dylib(f, 0, dylib_path)) {
 				printf("Added %s to %s\n", lc_name, binary_path);
 			} else {
 				printf("Failed to add %s!\n", lc_name);
@@ -313,7 +369,7 @@ int main(int argc, const char *argv[]) {
 	fclose(f);
 	
 	if(!success) {
-		if(!inplace) {
+		if(!inplace_flag) {
 			unlink(binary_path);
 		}
 		exit(1);

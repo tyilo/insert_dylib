@@ -13,7 +13,8 @@ Usage
 -----
 
 ```
-Usage: insert_dylib [--inplace] [--weak] dylib_path binary_path [new_path]
+Usage: insert_dylib dylib_path binary_path [new_binary_path]
+Option flags: --inplace --weak --overwrite --strip-codesig --no-strip-codesig
 ```
 
 `insert_dylib` inserts a load command to load the `dylib_path` in `binary_path`.
@@ -86,3 +87,5 @@ Todo
 ----
 
 - Improved checking for free space to insert the new load command
+- Allow removal of `LC_CODE_SIGNATURE` if it isn't the last load command
+- Remove `__RESTRICT,__restrict` if not enough space (suggesion by dirkg)
