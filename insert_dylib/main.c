@@ -118,7 +118,7 @@ bool check_load_commands(FILE *f, struct mach_header *mh, size_t header_offset, 
 					free(zero);
 					
 					mh->ncmds = SWAP32(ncmds - 1, mh->magic);
-					mh->sizeofcmds = SWAP32(SWAP32(mh->sizeofcmds, mh->magic) - ldc.cmdsize, mh->magic);
+					mh->sizeofcmds = SWAP32(SWAP32(mh->sizeofcmds, mh->magic) - cmdsize, mh->magic);
 					
 					return true;
 				} else {
@@ -133,7 +133,7 @@ bool check_load_commands(FILE *f, struct mach_header *mh, size_t header_offset, 
 				fread(dylib_command, cmdsize, 1, f);
 				
 				union lc_str offset = dylib_command->dylib.name;
-				char *name = &((char *)dylib_command)[offset.offset];
+				char *name = &((char *)dylib_command)[SWAP32(offset.offset, mh->magic)];
 				
 				int cmp = strcmp(name, dylib_path);
 				
