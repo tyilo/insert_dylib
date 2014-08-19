@@ -272,7 +272,7 @@ int main(int argc, const char *argv[]) {
 		exit(1);
 	}
 	
-	if(stat(dylib_path, &s) != 0) {
+	if(dylib_path[0] != '@' && stat(dylib_path, &s) != 0) {
 		if(!ask("The provided dylib path doesn't exist. Continue anyway?")) {
 			exit(1);
 		}
