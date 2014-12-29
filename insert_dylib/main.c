@@ -174,9 +174,14 @@ bool insert_dylib(FILE *f, size_t header_offset, const char *dylib_path) {
 	if(!cont) {
 		return true;
 	}
+
+	size_t path_padding = 4;
+	if(SWAP32(mh.cputype, mh.magic) == CPU_TYPE_ARM64) {
+		path_padding = 8;
+	}
 	
 	size_t dylib_path_len = strlen(dylib_path);
-	size_t dylib_path_size = (dylib_path_len & ~3) + 4;
+	size_t dylib_path_size = (dylib_path_len & ~3) + path_padding;
 	uint32_t cmdsize = (uint32_t)(sizeof(struct dylib_command) + dylib_path_size);
 	
 	struct dylib_command dylib_command = {
