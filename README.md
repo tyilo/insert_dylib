@@ -5,16 +5,16 @@ Command line utility for inserting a dylib load command into a Mach-O binary.
 
 Does the following (to each arch if the binary is fat):
 
-- (Removes `LC_CODE_SIGNATURE` load command if present) 
 - Adds a `LC_LOAD_DYLIB` load command to the end of the load commands
 - Increments the mach header's `ncmds` and adjusts its `sizeofcmds`
+- ([Removes code signature if present](#removing-code-signature))
 
 Usage
 -----
 
 ```
 Usage: insert_dylib dylib_path binary_path [new_binary_path]
-Option flags: --inplace --weak --overwrite --strip-codesig --no-strip-codesig
+Option flags: --inplace --weak --overwrite --strip-codesig --no-strip-codesig --all-yes
 ```
 
 `insert_dylib` inserts a load command to load the `dylib_path` in `binary_path`.
@@ -82,6 +82,23 @@ Added LC_LOAD_WEAK_DYLIB to test_patched2
 $ ./test_patched2
 Testing
 ```
+
+Removing code signature
+----
+
+To remove the code signature it is enough to delete the `LC_CODE_SIGNATURE` load command and fixup the mach header's `ncmds` and `sizeofcmds`, assuming it is the last load command.
+
+However if you just do this `codesign_allocate` (used by `codesign` and `ldid`) will fail with the error:
+
+```
+.../codesign_allocate: file not in an order that can be processed (link edit information does not fill the __LINKEDIT segment):
+```
+
+To fix this `insert_dylib` assumes that the code signature that `LC_CODE_SIGNATURE` is in the end of the `__LINKEDIT` segment and the that the segment is in the end of the architectures slice.
+
+It then truncate that slice to remove the code signature part of the `__LINKEDIT` segment. It also updates the `LC_SEGMENT` (or `LC_SEGMENT64`) load command for the `__LINKEDIT` segment from the new file size. If the binary is fat we also update the size and we might also move the slice and so the offset should also be updated.
+
+After removing the code signature from the `__LINKEDIT` segment, the last thing in that segment is typically the string table. As the code signature seems to be aligned by `0x10`, and so after removing the code signature, nothing points to the padding at the end of the segment, which `codesign_allocate` doesn't like either. To fix this we just increase the size of the string table in the `LC_SYMTAB` command so it also includes the padding.
 
 Todo
 ----
