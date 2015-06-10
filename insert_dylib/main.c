@@ -18,6 +18,7 @@ int inplace_flag = false;
 int weak_flag = false;
 int overwrite_flag = false;
 int codesig_flag = 0;
+int yes_flag = false;
 
 static struct option long_options[] = {
 	{"inplace",          no_argument, &inplace_flag,   true},
@@ -25,6 +26,7 @@ static struct option long_options[] = {
 	{"overwrite",        no_argument, &overwrite_flag, true},
 	{"strip-codesig",    no_argument, &codesig_flag,   1},
 	{"no-strip-codesig", no_argument, &codesig_flag,   2},
+	{"all-yes",          no_argument, &yes_flag,       true},
 	{NULL,               0,           NULL,            0}
 };
 
@@ -58,8 +60,13 @@ __attribute__((format(printf, 1, 2))) bool ask(const char *format, ...) {
 	while(true) {
 		char *line = NULL;
 		size_t size;
-		getline(&line, &size, stdin);
-		
+		if(yes_flag) {
+			puts("y");
+			line = "y";
+		} else {
+			getline(&line, &size, stdin);
+		}
+
 		switch(line[0]) {
 			case 'y':
 			case 'Y':
