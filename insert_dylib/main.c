@@ -481,15 +481,13 @@ int main(int argc, const char *argv[]) {
 			for(int i = 0; i < nfat_arch; i++) {
 				off_t orig_offset = SWAP32(archs[i].offset, magic);
 				off_t orig_slice_size = SWAP32(archs[i].size, magic);
-				uint32_t rounded_offset = ROUND_UP(offset, 1 << SWAP32(archs[i].align, magic));
-				if(orig_offset != rounded_offset) {
-					fmemmove(f, rounded_offset, orig_offset, orig_slice_size);
-					fbzero(f, MIN(rounded_offset, orig_offset), ABSDIFF(rounded_offset, orig_offset));
+				offset = ROUND_UP(offset, 1 << SWAP32(archs[i].align, magic));
+				if(orig_offset != offset) {
+					fmemmove(f, offset, orig_offset, orig_slice_size);
+					fbzero(f, MIN(offset, orig_offset) + orig_slice_size, ABSDIFF(offset, orig_offset));
 
-					archs[i].offset = SWAP32(rounded_offset, magic);
+					archs[i].offset = SWAP32(offset, magic);
 				}
-				file_size += rounded_offset - offset;
-				offset = rounded_offset;
 
 				off_t slice_size = orig_slice_size;
 				bool r = insert_dylib(f, offset, dylib_path, &slice_size);
@@ -498,16 +496,22 @@ int main(int argc, const char *argv[]) {
 					fails++;
 				}
 
+				if(slice_size < orig_slice_size && i < nfat_arch - 1) {
+					fbzero(f, offset + slice_size, orig_slice_size - slice_size);
+				}
+
+				file_size = offset + slice_size;
 				offset += slice_size;
-				file_size += slice_size - orig_slice_size;
 				archs[i].size = SWAP32((uint32_t)slice_size, magic);
 			}
-
-			ftruncate(fileno(f), file_size);
 
 			rewind(f);
 			fwrite(&fh, sizeof(fh), 1, f);
 			fwrite(archs, sizeof(archs), 1, f);
+
+			// We need to flush before truncating
+			fflush(f);
+			ftruncate(fileno(f), file_size);
 
 			if(fails == 0) {
 				printf("Added %s to all archs in %s\n", lc_name, binary_path);
