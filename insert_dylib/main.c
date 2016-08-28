@@ -443,7 +443,7 @@ int main(int argc, const char *argv[]) {
 	FILE *f = fopen(binary_path, "r+");
 
 	if(!f) {
-		printf("Couldn't open file %s\n", argv[1]);
+		printf("Couldn't open file %s\n", binary_path);
 		exit(1);
 	}
 
