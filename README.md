@@ -30,7 +30,8 @@ If the `--weak` option is specified, `insert_dylib` will insert a `LC_LOAD_WEAK_
 $ cat > test.c
 int main(void) {
 	printf("Testing\n");
-	return 0;}
+	return 0;
+}
 ^D
 $ clang test.c -o test &> /dev/null
 $ insert_dylib /usr/lib/libfoo.dylib test
